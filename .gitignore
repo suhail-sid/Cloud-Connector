@@ -57,8 +57,10 @@ logs/
 Thumbs.db
 .DS_Store
 
-# Project specific
-.env
-.pytest_cache
-__pycache__
-*.pyc
+# Project specific - Local documentation (keep locally, not on GitHub)
+PROJECT_GUIDE.md
+REQUIREMENTS_VERIFICATION.md
+FINAL_CHECKLIST.md
+setup.py
+Back-end Developer Assignment.docx
+LOCAL_DOCS/
