@@ -5,7 +5,9 @@ A simple, production-ready cloud connector to GitHub API built with FastAPI and 
 ## Features
 
 ✅ **Authentication**: GitHub Personal Access Token (PAT) with secure credential management  
-✅ **Multiple API Endpoints**: Repositories, Issues, Commits, and User information  
+✅ **OAuth 2.0**: Optional OAuth 2.0 authentication flow for enhanced security  
+✅ **Multiple API Endpoints**: Repositories, Issues, Commits, Pull Requests, and User information  
+✅ **Pull Request Creation**: Create pull requests programmatically  
 ✅ **Error Handling**: Comprehensive error handling with meaningful error messages  
 ✅ **Input Validation**: Pydantic models for request/response validation  
 ✅ **Logging**: Structured logging for debugging and monitoring  
@@ -17,7 +19,7 @@ A simple, production-ready cloud connector to GitHub API built with FastAPI and 
 
 - Python 3.8 or higher
 - pip (Python package manager)
-- GitHub Personal Access Token (PAT)
+- GitHub Personal Access Token (PAT) OR OAuth 2.0 credentials
 
 ## Installation
 
@@ -53,6 +55,8 @@ Create a `.env` file in the project root:
 cp .env.example .env
 ```
 
+#### Option A: Personal Access Token (PAT) - Recommended for Simple Setup
+
 Edit `.env` and add your GitHub Personal Access Token:
 
 ```
@@ -62,7 +66,7 @@ DEBUG=True
 LOG_LEVEL=INFO
 ```
 
-### Getting Your GitHub Personal Access Token
+**Getting Your GitHub Personal Access Token:**
 
 1. Go to [GitHub Settings → Developer settings → Personal access tokens](https://github.com/settings/tokens)
 2. Click "Generate new token"
@@ -71,6 +75,28 @@ LOG_LEVEL=INFO
    - `public_repo` - Access to public repositories
    - `read:user` - Read user profile data
 4. Copy the token and paste it in your `.env` file
+
+#### Option B: OAuth 2.0 - Recommended for Production
+
+Edit `.env` and add your OAuth 2.0 credentials:
+
+```
+OAUTH_ENABLED=True
+OAUTH_CLIENT_ID=your_oauth_client_id
+OAUTH_CLIENT_SECRET=your_oauth_client_secret
+OAUTH_REDIRECT_URI=http://localhost:8000/oauth/callback
+```
+
+**Setting up GitHub OAuth App:**
+
+1. Go to [GitHub Settings → Developer settings → OAuth Apps](https://github.com/settings/developers)
+2. Click "New OAuth App"
+3. Fill in the application details:
+   - **Application name**: GitHub Connector
+   - **Homepage URL**: `http://localhost:8000`
+   - **Authorization callback URL**: `http://localhost:8000/oauth/callback`
+4. Copy the Client ID and Client Secret to your `.env` file
+
 
 ## Running the Application
 
@@ -246,6 +272,97 @@ Create a new issue in a repository.
 }
 ```
 
+### Pull Requests
+
+#### Create Pull Request
+```
+POST /pulls/{owner}/{repo}
+Content-Type: application/json
+
+{
+  "title": "Add new feature",
+  "head": "feature-branch",
+  "base": "main",
+  "body": "This PR adds a new feature",
+  "draft": false
+}
+```
+Create a new pull request in a repository.
+
+**Parameters:**
+- `owner` (required): Repository owner username
+- `repo` (required): Repository name
+
+**Request Body:**
+```json
+{
+  "title": "Pull request title (required)",
+  "head": "Source branch (required)",
+  "base": "Target branch (required)",
+  "body": "Pull request description (optional)",
+  "draft": false (optional)
+}
+```
+
+**Response (201):**
+```json
+{
+  "id": 1,
+  "number": 1347,
+  "title": "Add new feature",
+  "body": "This PR adds a new feature",
+  "state": "open",
+  "head": {
+    "ref": "feature-branch",
+    "sha": "6dcb09b5b57875f334f61aebed695e2e4193db5e"
+  },
+  "base": {
+    "ref": "main",
+    "sha": "abc123def456"
+  },
+  "created_at": "2011-04-22T13:33:48Z",
+  "updated_at": "2011-04-23T13:33:48Z",
+  "url": "https://api.github.com/repos/octocat/Hello-World/pulls/1347"
+}
+```
+
+### OAuth 2.0 (Bonus)
+
+#### Get Authorization URL
+```
+GET /oauth/authorize
+```
+Get GitHub OAuth 2.0 authorization URL.
+
+**Response (200):**
+```json
+{
+  "authorization_url": "https://github.com/login/oauth/authorize?client_id=...",
+  "message": "Redirect user to this URL to authorize the application"
+}
+```
+
+#### OAuth Callback (Exchange Code for Token)
+```
+POST /oauth/callback
+Content-Type: application/json
+
+{
+  "code": "authorization_code_from_github",
+  "state": "optional_state_parameter"
+}
+```
+Exchange authorization code for access token.
+
+**Response (200):**
+```json
+{
+  "access_token": "ghu_16C7e42F292c6912E7710c838347Ae178B4a",
+  "token_type": "bearer",
+  "scope": "repo,user"
+}
+```
+
 ### Commits
 
 #### Get Repository Commits
@@ -373,23 +490,24 @@ pytest test_github_connector.py -v
 3. **Rate Limiting**: GitHub API has rate limits (60 requests/hour for unauthenticated, 5000 for authenticated)
 4. **Token Scopes**: Only request necessary scopes for your use case
 5. **Environment Variables**: Use environment variables to manage sensitive data
+6. **OAuth State Parameter**: Always validate the state parameter in OAuth flow to prevent CSRF attacks
 
 ## Limitations
 
 - GitHub API rate limits apply
 - Some operations require specific repository permissions
-- OAuth 2.0 implementation can be added for enhanced security
+- Rate limiting middleware can be added for better control
 
 ## Future Enhancements
 
-- [ ] OAuth 2.0 authentication
 - [ ] Rate limiting middleware
 - [ ] Request/response caching
 - [ ] Webhook support
-- [ ] Pull request creation and management
-- [ ] Additional repository operations
+- [ ] Additional repository operations (branch protection, labels, etc.)
 - [ ] Docker containerization
 - [ ] CI/CD pipeline
+- [ ] GraphQL API support
+- [ ] Batch operations support
 
 ## Troubleshooting
 

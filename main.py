@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 
 from config import Settings, get_settings
-from github_client import GitHubClient
+from github_client import GitHubClient, GitHubOAuth
 from exceptions import (
     GitHubConnectorError,
     AuthenticationError,
@@ -25,7 +25,11 @@ from models import (
     CommitResponse,
     UserResponse,
     HealthResponse,
-    ErrorResponse
+    ErrorResponse,
+    PullRequestResponse,
+    CreatePullRequestRequest,
+    OAuthTokenResponse,
+    OAuthAuthorizationRequest
 )
 
 # Configure logging
@@ -61,11 +65,15 @@ github_client: Optional[GitHubClient] = None
 def get_github_client(settings: Settings = Depends(get_settings)) -> GitHubClient:
     """
     Dependency to get GitHub client
-    Initializes client on first request
+    Initializes client on first request using PAT authentication
     """
     global github_client
     if github_client is None:
         try:
+            if not settings.github_token:
+                raise ValidationError(
+                    "GitHub token is required. Set GITHUB_TOKEN in .env file or use OAuth 2.0"
+                )
             github_client = GitHubClient(settings.github_token, settings.github_api_base_url)
         except Exception as e:
             logger.error(f"Failed to initialize GitHub client: {str(e)}")
@@ -79,7 +87,20 @@ async def startup_event():
     logger.info("GitHub Connector API starting up...")
     try:
         settings = get_settings()
-        get_github_client(settings)
+        
+        # Check if authentication is configured
+        if not settings.github_token and not (settings.oauth_enabled and settings.oauth_client_id):
+            logger.warning(
+                "No authentication configured. Configure GITHUB_TOKEN for PAT or "
+                "OAUTH_ENABLED with OAUTH_CLIENT_ID for OAuth 2.0"
+            )
+        else:
+            if settings.github_token:
+                logger.info("Using Personal Access Token (PAT) authentication")
+                get_github_client(settings)
+            if settings.oauth_enabled:
+                logger.info("OAuth 2.0 authentication is enabled")
+        
         logger.info("GitHub Connector API initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize application: {str(e)}")
@@ -338,6 +359,132 @@ async def get_repository_commits(
     except NotFoundError as e:
         logger.warning(f"Not found error: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e))
+    except APIError as e:
+        logger.error(f"API error: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.post(
+    "/pulls/{owner}/{repo}",
+    response_model=PullRequestResponse,
+    tags=["Pull Requests"],
+    status_code=201
+)
+async def create_pull_request(
+    owner: str,
+    repo: str,
+    pr: CreatePullRequestRequest,
+    client: GitHubClient = Depends(get_github_client)
+):
+    """
+    Create a pull request in a repository
+    
+    Parameters:
+        owner: Repository owner username
+        repo: Repository name
+        pr: Pull request details (title, head, base, body, draft)
+    
+    Returns:
+        Created pull request information
+    """
+    try:
+        return client.create_pull_request(
+            owner,
+            repo,
+            pr.title,
+            pr.head,
+            pr.base,
+            pr.body,
+            pr.draft
+        )
+    except ValidationError as e:
+        logger.warning(f"Validation error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except NotFoundError as e:
+        logger.warning(f"Not found error: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except APIError as e:
+        logger.error(f"API error: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.get("/oauth/authorize", tags=["OAuth 2.0"])
+async def get_oauth_authorization_url(
+    settings: Settings = Depends(get_settings)
+):
+    """
+    Get GitHub OAuth 2.0 authorization URL
+    
+    Returns:
+        Authorization URL to redirect user to GitHub login
+    """
+    if not settings.oauth_enabled or not settings.oauth_client_id:
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth 2.0 is not enabled. Configure OAUTH_CLIENT_ID and related settings."
+        )
+    
+    try:
+        oauth_client = GitHubOAuth(
+            settings.oauth_client_id,
+            settings.oauth_client_secret,
+            settings.oauth_redirect_uri
+        )
+        auth_url = oauth_client.get_authorization_url(scopes=["repo", "user"])
+        return {
+            "authorization_url": auth_url,
+            "message": "Redirect user to this URL to authorize the application"
+        }
+    except ValidationError as e:
+        logger.warning(f"Validation error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error generating authorization URL: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to generate authorization URL")
+
+
+@app.post("/oauth/callback", response_model=OAuthTokenResponse, tags=["OAuth 2.0"])
+async def oauth_callback(
+    auth_request: OAuthAuthorizationRequest,
+    settings: Settings = Depends(get_settings)
+):
+    """
+    Handle OAuth 2.0 callback and exchange code for access token
+    
+    Parameters:
+        auth_request: Authorization code from GitHub
+    
+    Returns:
+        Access token information
+    """
+    if not settings.oauth_enabled or not settings.oauth_client_id:
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth 2.0 is not enabled"
+        )
+    
+    try:
+        oauth_client = GitHubOAuth(
+            settings.oauth_client_id,
+            settings.oauth_client_secret,
+            settings.oauth_redirect_uri
+        )
+        token_response = oauth_client.exchange_code_for_token(auth_request.code)
+        
+        return OAuthTokenResponse(
+            access_token=token_response.get("access_token"),
+            token_type=token_response.get("token_type", "bearer"),
+            scope=token_response.get("scope", "")
+        )
+    except ValidationError as e:
+        logger.warning(f"Validation error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
     except APIError as e:
         logger.error(f"API error: {str(e)}")
         raise HTTPException(status_code=502, detail=str(e))
